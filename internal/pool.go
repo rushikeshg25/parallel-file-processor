@@ -7,51 +7,57 @@ import (
 )
 
 type Pool struct {
-	workers   int
-	jobs      chan string
-	results   chan int
-	wg        sync.WaitGroup
-	totalJobs int
+	workers int
+	Jobs    chan string
+	results chan int
+	wg      sync.WaitGroup
 }
 
 func NewWorkerPool(workers int) *Pool {
-	jobs := make(chan string, 100)
-	results := make(chan int, 100)
 	return &Pool{
-		jobs:      jobs,
-		results:   results,
-		workers:   workers,
-		wg:        sync.WaitGroup{},
-		totalJobs: 100,
+		Jobs:    make(chan string, 100),
+		results: make(chan int, 100),
+		workers: workers,
 	}
 }
 
-func (p *Pool) Run(count func(string) (int, error)) {
+func (p *Pool) Run(countFunc func(string) (int, error)) {
 	for i := 0; i < p.workers; i++ {
 		p.wg.Add(1)
-		go func() {
+		go func(workerID int) {
 			defer p.wg.Done()
-			for job := range p.jobs {
-				wordCount, err := count(job)
+			for job := range p.Jobs {
+				wordCount, err := countFunc(job)
 				if err != nil {
-					log.Fatalf("failed to read %s because of error %v\n", job, err)
+					log.Printf("Worker %d failed to process %s: %v", workerID, job, err)
+					p.results <- 0
 				} else {
+					fmt.Printf("Worker %d processed %s: %d occurrences\n", workerID, job, wordCount)
 					p.results <- wordCount
-					fmt.Println()
 				}
 			}
-		}()
+		}(i)
 	}
 }
 
-func (p *Pool) StartJob(filePath string) {
-	p.jobs <- filePath
+func (p *Pool) Close() {
+	close(p.Jobs)
 }
 
 func (p *Pool) Wait() {
 	p.wg.Wait()
 }
 
-func (p *Pool) Close() {
-	close(p.jobs)
+func (p *Pool) CollectResults() int {
+	go func() {
+		p.Wait()
+		close(p.results)
+	}()
+
+	totalCount := 0
+	for count := range p.results {
+		totalCount += count
+	}
+
+	return totalCount
 }
